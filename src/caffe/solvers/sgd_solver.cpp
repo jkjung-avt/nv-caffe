@@ -59,7 +59,40 @@ float SGDSolver<Dtype>::GetLearningRate() const {
     rate = (base_lr - min_lr) * std::pow(1.F - (float(this->iter_) / maxiter), power) + min_lr;
   } else if (lr_policy == "sigmoid") {
     rate = this->param_.base_lr() / (1.F +
-        std::exp(-this->param_.gamma() * (double(this->iter_ - this->param_.stepsize()))));
+        std::exp(-this->param_.gamma() * (float(this->iter_ - this->param_.stepsize()))));
+  } else if (lr_policy == "triangular") {
+    int itr = this->iter_ - this->param_.start_lr_policy();
+    if (itr > 0) {
+      int cycle = itr / (2*this->param_.stepsize());
+      float x = (float) (itr - (2*cycle+1)*this->param_.stepsize());
+      x = x / float(this->param_.stepsize());
+      rate = this->param_.base_lr() + float(this->param_.max_lr() - this->param_.base_lr()) * std::max(0.F, (1.F - fabs(x)));
+    } else {
+      rate = this->param_.base_lr();
+    }
+  } else if (lr_policy == "triangular2") {
+    int itr = this->iter_ - this->param_.start_lr_policy();
+    if (itr > 0) {
+      int cycle = itr / (2*this->param_.stepsize());
+      float x = float((itr - (2*cycle+1)*this->param_.stepsize()));
+      x = x / float(this->param_.stepsize());
+      rate = this->param_.base_lr() + float(this->param_.max_lr() - this->param_.base_lr()) * std::max(0.F, (1.F - fabs(x)) / pow(2.F, float(cycle)));
+    } else {
+      rate = this->param_.base_lr();
+    }
+  } else if (lr_policy == "triangular3") {
+    int itr = this->iter_ - this->param_.start_lr_policy();
+    if (itr > 0) {
+      itr %= ((this->param_.downward_mult()+1)*this->param_.stepsize());
+      float x = float(itr);
+      if (itr > this->param_.stepsize()) {
+        x = float(((this->param_.downward_mult()+1)*this->param_.stepsize()-itr))/float(this->param_.downward_mult());
+      }
+      x = x / float(this->param_.stepsize());
+      rate = this->param_.base_lr() + float(x * (this->param_.max_lr() - this->param_.base_lr()));
+    } else {
+      rate = this->param_.base_lr();
+    }
   } else {
     LOG(FATAL) << "Unknown learning rate policy: " << lr_policy;
   }
