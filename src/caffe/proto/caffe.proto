@@ -372,6 +372,10 @@ message SolverParameter {
   // If true, display per class result.
   optional bool show_per_class_result = 244 [default = false];
 
+  optional float start_lr_policy = 57 [default = 0.];
+  optional float max_lr = 58; // the maximum learning rate for CLR policies
+  optional int32 downward_mult = 59; // downward stepsize multiplier for "triangular3"
+
   // The number of iterations for each test net.
   repeated int32 test_iter = 3;
 
