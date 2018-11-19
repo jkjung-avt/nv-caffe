@@ -64,9 +64,9 @@ float SGDSolver<Dtype>::GetLearningRate() const {
     int itr = this->iter_ - this->param_.start_lr_policy();
     if (itr > 0) {
       int cycle = itr / (2*this->param_.stepsize());
-      float x = (float) (itr - (2*cycle+1)*this->param_.stepsize());
+      float x = float(itr - (2*cycle+1)*this->param_.stepsize());
       x = x / float(this->param_.stepsize());
-      rate = this->param_.base_lr() + float(this->param_.max_lr() - this->param_.base_lr()) * std::max(0.F, (1.F - fabs(x)));
+      rate = this->param_.base_lr() + float(this->param_.max_lr() - this->param_.base_lr()) * std::max(float(0.F), float(1.F - fabs(x)));
     } else {
       rate = this->param_.base_lr();
     }
@@ -76,7 +76,7 @@ float SGDSolver<Dtype>::GetLearningRate() const {
       int cycle = itr / (2*this->param_.stepsize());
       float x = float((itr - (2*cycle+1)*this->param_.stepsize()));
       x = x / float(this->param_.stepsize());
-      rate = this->param_.base_lr() + float(this->param_.max_lr() - this->param_.base_lr()) * std::max(0.F, (1.F - fabs(x)) / pow(2.F, float(cycle)));
+      rate = this->param_.base_lr() + float(this->param_.max_lr() - this->param_.base_lr()) * std::max(float(0.F), float((1.F - fabs(x)) / pow(2.F, cycle)));
     } else {
       rate = this->param_.base_lr();
     }
