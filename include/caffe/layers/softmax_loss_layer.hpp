@@ -58,6 +58,8 @@ class SoftmaxWithLossLayer : public LossLayer<Ftype, Btype> {
   }
   virtual void LayerSetUp(const vector<Blob*>& bottom,
       const vector<Blob*>& top);
+  void SetClassWeights(
+      const vector<float> class_weights);
   virtual void Reshape(const vector<Blob*>& bottom,
       const vector<Blob*>& top);
 
@@ -128,6 +130,8 @@ class SoftmaxWithLossLayer : public LossLayer<Ftype, Btype> {
   int softmax_axis_, outer_num_, inner_num_;
 
   Ftype label_smoothing_;
+  bool has_class_weights_;
+  TBlob<float> class_weights_;
 };
 
 }  // namespace caffe

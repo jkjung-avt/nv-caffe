@@ -47,6 +47,22 @@ void SoftmaxWithLossLayer<Ftype, Btype>::LayerSetUp(
     normalization_ = this->layer_param_.loss_param().normalization();
   }
   label_smoothing_ = this->layer_param_.loss_param().label_smoothing();
+  has_class_weights_ = false;  // default
+}
+
+template <typename Ftype, typename Btype>
+void SoftmaxWithLossLayer<Ftype, Btype>::SetClassWeights(
+    const vector<float> class_weights) {
+  vector<int> cw_shape(1, class_weights.size());
+  class_weights_.Reshape(cw_shape);
+  float* class_weights_data = class_weights_.mutable_cpu_data<float>();
+  for (int i = 0; i < class_weights.size(); ++i) {
+    LOG(INFO) << "class_weights[" << i << "] = " << class_weights[i];
+    CHECK_GE(class_weights[i], 1.0) << \
+        "class_weight value must be greater than or equal to 1.0.";
+    class_weights_data[i] = class_weights[i];
+  }
+  has_class_weights_ = true;
 }
 
 template <typename Ftype, typename Btype>
@@ -63,6 +79,15 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Reshape(
       << "e.g., if softmax axis == 1 and prediction shape is (N, C, H, W), "
       << "label count (number of labels) must be N*H*W, "
       << "with integer values in {0, 1, ..., C-1}.";
+  if (has_class_weights_) {
+    CHECK_EQ(bottom[0]->shape(softmax_axis_), class_weights_.count())
+      << "Number of class_weight's ("
+      << class_weights_.count()
+      << ") should be equal to number of elements in the "
+      << "softmax_axis dimension ("
+      << bottom[0]->shape(softmax_axis_)
+      << ").";
+  }
   if (top.size() >= 2) {
     // softmax output
     top[1]->ReshapeLike(*bottom[0]);
@@ -109,6 +134,11 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Forward_cpu(
   const Ftype* label = bottom[1]->cpu_data<Ftype>();
   int dim = prob_->count() / outer_num_;
   int count = 0;
+  float weighted_count = 0.0;
+  const float* class_weights_data = 0;
+  if (has_class_weights_) {
+    class_weights_data = class_weights_.cpu_data<float>();
+  }
   float loss = 0.F;
   for (int i = 0; i < outer_num_; ++i) {
     for (int j = 0; j < inner_num_; j++) {
@@ -118,12 +148,27 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Forward_cpu(
       }
       DCHECK_GE(label_value, 0);
       DCHECK_LT(label_value, prob_->shape(softmax_axis_));
-      loss -= log(std::max(prob_data[i * dim + label_value * inner_num_ + j],
-          min_dtype<Ftype>()));
+      if (has_class_weights_) {
+        float w = class_weights_data[label_value];
+        loss -= log(std::max(prob_data[i * dim + label_value * inner_num_ + j],
+                             min_dtype<Ftype>())) * w;
+        weighted_count += w;
+      } else {
+        loss -= log(std::max(prob_data[i * dim + label_value * inner_num_ + j],
+            min_dtype<Ftype>()));
+      }
       ++count;
     }
   }
-  top[0]->mutable_cpu_data<Ftype>()[0] = loss / get_normalizer(normalization_, count);
+  float normalizer = get_normalizer(normalization_, count);
+  if (has_class_weights_) {
+    CHECK_GE(weighted_count, count) << \
+        "weighted_count should be greater than or equal to count.";
+    top[0]->mutable_cpu_data<Ftype>()[0] = (loss / normalizer) /
+                                           (weighted_count / count);
+  } else {
+    top[0]->mutable_cpu_data<Ftype>()[0] = loss / normalizer;
+  }
   if (top.size() == 2) {
     top[1]->ShareData(*prob_);
   }
@@ -142,6 +187,11 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
     const Btype* label = bottom[1]->cpu_data<Btype>();
     int dim = prob_->count() / outer_num_;
     int count = 0;
+    float weighted_count = 0.0;
+    const float* class_weights_data = 0;
+    if (has_class_weights_) {
+      class_weights_data = class_weights_.cpu_data<float>();
+    }
     for (int i = 0; i < outer_num_; ++i) {
       for (int j = 0; j < inner_num_; ++j) {
         const int label_value = static_cast<int>(label[i * inner_num_ + j]);
@@ -150,7 +200,16 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
             bottom_diff[i * dim + c * inner_num_ + j] = 0.F;
           }
         } else {
-          bottom_diff[i * dim + label_value * inner_num_ + j] -= 1.F;
+          if (has_class_weights_) {
+            float w = class_weights_data[label_value];
+            bottom_diff[i * dim + label_value * inner_num_ + j] -= 1.F;
+            for (int c = 0; c < bottom[0]->shape(softmax_axis_); ++c) {
+              bottom_diff[i * dim + c * inner_num_ + j] *= w;
+            }
+            weighted_count += w;
+          } else {
+            bottom_diff[i * dim + label_value * inner_num_ + j] -= 1.F;
+          }
           ++count;
         }
       }
@@ -159,7 +218,14 @@ void SoftmaxWithLossLayer<Ftype, Btype>::Backward_cpu(const vector<Blob*>& top,
     Btype loss_weight = top[0]->cpu_diff<Btype>()[0];
     const float global_grad_scale =
         this->parent_net() == nullptr ? 1.F : this->parent_net()->global_grad_scale();
-    loss_weight = loss_weight * global_grad_scale / get_normalizer(normalization_, count);
+    float weight_normalization = 1.F;
+    float normalizer = get_normalizer(normalization_, count);
+    if (has_class_weights_) {
+      CHECK_GE(weighted_count, count) << \
+          "weighted_count should be greater than or equal to count.";
+      weight_normalization = weighted_count / count;
+    }
+    loss_weight = loss_weight * global_grad_scale / get_normalizer(normalization_, count) / weight_normalization;
     caffe_scal(prob_->count(), loss_weight, bottom_diff);
   }
 }
