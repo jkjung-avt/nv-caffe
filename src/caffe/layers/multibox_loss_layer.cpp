@@ -5,6 +5,7 @@
 
 #include "caffe/layers/multibox_loss_layer.hpp"
 #include "caffe/util/math_functions.hpp"
+#include "caffe/layers/softmax_loss_layer.hpp"
 
 namespace caffe {
 
@@ -28,6 +29,16 @@ void MultiBoxLossLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
   CHECK(multibox_loss_param.has_num_classes()) << "Must provide num_classes.";
   num_classes_ = multibox_loss_param.num_classes();
   CHECK_GE(num_classes_, 1) << "num_classes should not be less than 1.";
+  class_weights_.clear();
+  if (multibox_loss_param.class_weight_size() > 0) {
+      for (int i = 0; i < multibox_loss_param.class_weight_size(); ++i) {
+        class_weights_.push_back(multibox_loss_param.class_weight(i));
+        CHECK_GE(class_weights_.back(), 1.0) << \
+            "class_weight value must be greater than or equal to 1.0.";
+      }
+      CHECK_EQ(class_weights_.size(), num_classes_)
+        << "Number of class_weight's should be equal to num_classes.";
+  }
   share_location_ = multibox_loss_param.share_location();
   loc_classes_ = share_location_ ? 1 : num_classes_;
   background_label_id_ = multibox_loss_param.background_label_id();
@@ -117,7 +128,13 @@ void MultiBoxLossLayer<Ftype, Btype>::LayerSetUp(const vector<Blob*>& bottom,
     conf_bottom_vec_.push_back(conf_gt_.get());
     conf_loss_layer_ = LayerRegistry::CreateLayer(layer_param, this->parent_rank());
     conf_loss_layer_->SetUp(conf_bottom_vec_, conf_top_vec_);
+    if (class_weights_.size() > 0) {
+      ((SoftmaxWithLossLayer<Ftype, Btype> *) conf_loss_layer_.get())->SetClassWeights(class_weights_);
+    }
   } else if (conf_loss_type_ == MultiBoxLossParameter_ConfLossType_LOGISTIC) {
+    if (class_weights_.size() > 0) {
+      LOG(FATAL) << "Class_weight is not supported for ConfLossType_LOGISTIC.";
+    }
     LayerParameter layer_param;
     layer_param.set_name(this->layer_param_.name() + "_logistic_conf");
     layer_param.set_type("SigmoidCrossEntropyLoss");

@@ -1708,6 +1708,12 @@ message MultiBoxLossParameter {
   optional int32 sample_size = 22 [default = 64];
   optional bool use_prior_for_nms = 23 [default = false];
   optional bool ignore_difficult_gt = 24 [default = false];
+
+  // For setting weight for each class.
+  // If present, there should be equal number of 'class_weight' as
+  // what's specified in 'num_classes' (including 'background').
+  // All 'class_weight' should be greater than or equal to 1.0.
+  repeated float class_weight = 25;
 }
 
 message MVNParameter {
