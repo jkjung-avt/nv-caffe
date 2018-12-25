@@ -93,3 +93,7 @@ LOCK
 LOG*
 CURRENT
 MANIFEST-*
+
+# temporary working files and training logs
+jobs/
+*.log
