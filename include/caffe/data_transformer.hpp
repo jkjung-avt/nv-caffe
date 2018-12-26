@@ -156,10 +156,16 @@ class DataTransformer {
    */
   void ExpandImage(const AnnotatedDatum& anno_datum, AnnotatedDatum* expanded_anno_datum);
 
+
+  void RotateImage(const Datum& datum, const cv::Mat& rotate_mat,
+                   const cv::Size2f& rot_size, Datum* rotate_datum, cv::Mat& rotate_img);
+
+  void RotateImage(const AnnotatedDatum& anno_datum, AnnotatedDatum* rotated_anno_datum);
+
   /**
    * @brief Apply distortion to the datum.
    */
-  void DistortImage(const Datum& datum, Datum* distort_datum);
+  void DistortImage(const AnnotatedDatum& anno_datum, AnnotatedDatum* distort_anno_datum);
 
   /**
    * @brief Applies the transformation defined in the data layer's
@@ -229,7 +235,8 @@ class DataTransformer {
       const NormalizedBBox& crop_bbox, const bool do_mirror,
       RepeatedPtrField<AnnotationGroup>* transformed_anno_group_all);
 
-
+  void RotateAnnotation(const AnnotatedDatum& anno_datum, const cv::Mat& rotation_mat,
+                        AnnotatedDatum* rotated_anno_datum);
   /**
    * @brief Applies the transformation defined in the data layer's
    * transform_param block to a cv::Mat
@@ -253,6 +260,9 @@ class DataTransformer {
    */
   void ExpandImage(const cv::Mat& img, const float expand_ratio,
                    NormalizedBBox* expand_bbox, cv::Mat* expand_img);
+
+  void RotateImage(const cv::Mat& img, const cv::Mat& rotate_mat,
+                   const cv::Size2f& rot_size, cv::Mat& rotate_img); 
 
   /**
    * @brief Infers the shape of transformed_blob will have when

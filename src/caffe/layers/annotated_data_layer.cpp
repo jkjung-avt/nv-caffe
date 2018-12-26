@@ -200,21 +200,21 @@ bool AnnotatedDataLayer<Ftype, Btype>::load_batch(Batch* batch, int thread_id, s
       current_batch_id = anno_datum->record_id() / batch_size;
     }
     AnnotatedDatum distort_datum;
+    AnnotatedDatum rotate_datum;
     AnnotatedDatum expand_datum;
+    distort_datum.CopyFrom(*anno_datum);
     if (transform_param.has_distort_param()) {
-      distort_datum.CopyFrom(*anno_datum);
-      this->bdt(thread_id)->DistortImage(anno_datum->datum(), distort_datum.mutable_datum());
-      if (transform_param.has_expand_param()) {
-        this->bdt(thread_id)->ExpandImage(distort_datum, &expand_datum);
-      } else {
-        expand_datum = distort_datum;
-      }
+      this->bdt(thread_id)->DistortImage(*anno_datum, &distort_datum);
+    }
+    if (transform_param.has_rotate_param()) {
+      this->bdt(thread_id)->RotateImage(distort_datum, &rotate_datum);
     } else {
-      if (transform_param.has_expand_param()) {
-        this->bdt(thread_id)->ExpandImage(*anno_datum, &expand_datum);
-      } else {
-        expand_datum = *anno_datum;
-      }
+      rotate_datum = distort_datum;
+    }
+    if (transform_param.has_expand_param()) {
+      this->bdt(thread_id)->ExpandImage(rotate_datum, &expand_datum);
+    } else {
+      expand_datum = rotate_datum;
     }
     AnnotatedDatum sampled_datum;
     if (batch_samplers_.size() > 0) {
