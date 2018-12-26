@@ -673,6 +673,60 @@ void DataTransformer<Dtype>::TransformAnnotation(
 }
 
 template<typename Dtype>
+void DataTransformer<Dtype>::RotateAnnotation(
+    const AnnotatedDatum& anno_datum, const cv::Mat& rotation_mat, AnnotatedDatum* rotated_anno_datum
+    ) {
+  const int img_height = anno_datum.datum().height();
+  const int img_width = anno_datum.datum().width();
+  const int rot_height = rotated_anno_datum->datum().height();
+  const int rot_width = rotated_anno_datum->datum().width();
+  RepeatedPtrField<AnnotationGroup>* transformed_anno_group_all = rotated_anno_datum->mutable_annotation_group();
+  if (anno_datum.type() == AnnotatedDatum_AnnotationType_BBOX) {
+    // Go through each AnnotationGroup.
+    for (int g = 0; g < anno_datum.annotation_group_size(); ++g) {
+      const AnnotationGroup& anno_group = anno_datum.annotation_group(g);
+      AnnotationGroup transformed_anno_group;
+      // Go through each Annotation.
+      bool has_valid_annotation = false;
+      for (int a = 0; a < anno_group.annotation_size(); ++a) {
+        const Annotation& anno = anno_group.annotation(a);
+        const NormalizedBBox& bbox = anno.bbox();
+        const float bbox_xmin = bbox.xmin()*img_width;
+        const float bbox_ymin = bbox.ymin()*img_height;
+        const float bbox_xmax = bbox.xmax()*img_width;
+        const float bbox_ymax = bbox.ymax()*img_height;
+        // Adjust bounding box annotation.
+        has_valid_annotation = true;
+        Annotation* transformed_anno = transformed_anno_group.add_annotation();
+        transformed_anno->set_instance_id(anno.instance_id());
+        cv::Mat pt_mat = rotation_mat*(cv::Mat_<float>(3,4) << 
+                                       bbox_xmin, bbox_xmax, bbox_xmin, bbox_xmax,
+                                       bbox_ymin, bbox_ymin, bbox_ymax, bbox_ymax,
+                                              1.,        1.,        1.,        1.);
+        cv::Mat pt_max;
+        cv::reduce(pt_mat, pt_max, 1, cv::REDUCE_MAX, CV_32FC1); 
+        cv::Mat pt_min;
+        cv::reduce(pt_mat, pt_min, 1, cv::REDUCE_MIN, CV_32FC1);
+        NormalizedBBox rot_bbox;
+        rot_bbox.set_xmin(pt_min.at<float>(0,0)/rot_width);
+        rot_bbox.set_ymin(pt_min.at<float>(1,0)/rot_height);
+        rot_bbox.set_xmax(pt_max.at<float>(0,0)/rot_width);
+        rot_bbox.set_ymax(pt_max.at<float>(1,0)/rot_height);
+        NormalizedBBox* transformed_bbox = transformed_anno->mutable_bbox();
+        transformed_bbox->CopyFrom(rot_bbox);
+      }
+      // Save for output.
+      if (has_valid_annotation) {
+        transformed_anno_group.set_group_label(anno_group.group_label());
+        transformed_anno_group_all->Add()->CopyFrom(transformed_anno_group);
+      }
+    }
+  } else {
+    LOG(FATAL) << "Unknown annotation type.";
+  }
+}
+
+template<typename Dtype>
 void DataTransformer<Dtype>::CropImage(const Datum& datum,
                                        const NormalizedBBox& bbox,
                                        Datum* crop_datum) {
@@ -860,8 +914,106 @@ void DataTransformer<Dtype>::ExpandImage(const AnnotatedDatum& anno_datum,
 }
 
 template<typename Dtype>
-void DataTransformer<Dtype>::DistortImage(const Datum& datum,
-                                          Datum* distort_datum) {
+void DataTransformer<Dtype>::RotateImage(const Datum& datum,
+                                         const cv::Mat& rotate_mat,
+                                         const cv::Size2f& rot_size,
+                                         Datum* rotate_datum,
+                                         cv::Mat& rotate_img) {
+  // If datum is encoded, decode and crop the cv::image.
+  if (datum.encoded()) {
+    CHECK(!(param_.force_color() && param_.force_gray()))
+        << "cannot set both force_color and force_gray";
+    cv::Mat cv_img;
+    if (param_.force_color() || param_.force_gray()) {
+      // If force_color then decode in color otherwise decode in gray.
+      cv_img = DecodeDatumToCVMat(datum, param_.force_color());
+    } else {
+      cv_img = DecodeDatumToCVMatNative(datum);
+    }
+    // Rotate the image.
+    RotateImage(cv_img, rotate_mat, rot_size, rotate_img);
+    // Save the image into datum.
+    EncodeCVMatToDatum(rotate_img, "jpg", rotate_datum);
+    rotate_datum->set_label(datum.label());
+    return;
+  } else {
+    LOG(ERROR) << "can only use encoded datum in data rotation";
+  }
+}
+
+template<typename Dtype>
+void DataTransformer<Dtype>::RotateImage(const AnnotatedDatum& anno_datum,
+                                         AnnotatedDatum* rotated_anno_datum) {
+  if (!param_.has_rotate_param()) {
+    rotated_anno_datum->CopyFrom(anno_datum);
+    return;
+  }
+  const RotationParameter& rotate_param = param_.rotate_param();
+  const float rotate_prob = rotate_param.prob();
+  const float rotate_angle = rotate_param.max_rotate_angle();
+  float prob;
+  float angle;
+  caffe_rng_uniform(1, 0.f, 1.f, &prob);
+  caffe_rng_uniform(1, -rotate_angle, rotate_angle, &angle);
+  if (prob > rotate_prob) {
+    rotated_anno_datum->CopyFrom(anno_datum);
+    return;
+  }
+  // get rotation matrix for rotating the image around its center in pixel coordinates
+  cv::Mat rotate_mat = cv::Mat::zeros(2,3, CV_32F);
+  const int img_height = anno_datum.datum().height();
+  const int img_width = anno_datum.datum().width();
+  cv::Point2f center((img_width)/2.0, (img_height)/2.0);
+  const float ang_rad = (angle/180.0)*M_PI;    
+  const float alpha = std::cos(ang_rad);
+  const float beta = std::sin(ang_rad);
+  rotate_mat.at<float>(0,0) = alpha;
+  rotate_mat.at<float>(0,1) = -beta;
+  rotate_mat.at<float>(0,2) = (1-alpha)*center.x + beta*center.y;
+  rotate_mat.at<float>(1,0) = beta;
+  rotate_mat.at<float>(1,1) = alpha;
+  rotate_mat.at<float>(1,2) = -beta*center.x + (1-alpha)*center.y;
+  // determine bounding rectangle, center not relevant
+  cv::Rect2f bbox = cv::RotatedRect(cv::Point2f(), cv::Size2f(img_width, img_height),
+                                    -angle).boundingRect2f();
+  // adjust transformation matrix
+  rotate_mat.at<float>(0,2) += (bbox.width - img_width)/2.0;
+  rotate_mat.at<float>(1,2) += (bbox.height - img_height)/2.0;
+  // Rotate the datum.
+  cv::Mat rotate_img; 
+  RotateImage(anno_datum.datum(), rotate_mat, bbox.size(),
+              rotated_anno_datum->mutable_datum(), rotate_img);
+  rotated_anno_datum->set_type(anno_datum.type());
+
+  // Transform the annotation according to rotate_bbox.
+  RotateAnnotation(anno_datum, rotate_mat, rotated_anno_datum);
+
+  // Save test image.
+  std::ifstream infile("test_rotate.jpg");
+  if (!infile.good()) {
+    const int rot_height = rotated_anno_datum->datum().height();
+    const int rot_width = rotated_anno_datum->datum().width();
+    for (int g = 0; g < rotated_anno_datum->annotation_group_size(); ++g) {
+      const AnnotationGroup& anno_group = rotated_anno_datum->annotation_group(g);
+      // Go through each Annotation.
+      for (int a = 0; a < anno_group.annotation_size(); ++a) {
+        const NormalizedBBox& bbox = anno_group.annotation(a).bbox();
+        cv::rectangle(rotate_img,
+                      cv::Rect(bbox.xmin()*rot_width, bbox.ymin()*rot_height,
+                               (bbox.xmax() - bbox.xmin())*rot_width,
+                               (bbox.ymax() - bbox.ymin())*rot_height),
+                      cv::Scalar(0,255,0));
+      }
+    }
+    cv::imwrite("test_rotate.jpg", rotate_img );
+  }
+}
+
+template<typename Dtype>
+void DataTransformer<Dtype>::DistortImage(const AnnotatedDatum& anno_datum,
+                                          AnnotatedDatum* distort_anno_datum) {
+  const Datum& datum = anno_datum.datum();
+  Datum* distort_datum = distort_anno_datum->mutable_datum();
   if (!param_.has_distort_param()) {
     distort_datum->CopyFrom(datum);
     return;
@@ -882,6 +1034,24 @@ void DataTransformer<Dtype>::DistortImage(const Datum& datum,
     // Save the image into datum.
     EncodeCVMatToDatum(distort_img, "jpg", distort_datum);
     distort_datum->set_label(datum.label());
+    std::ifstream infile("test_distort.jpg");
+    if (!infile.good()) {
+      const int distort_height = distort_anno_datum->datum().height();
+      const int distort_width = distort_anno_datum->datum().width();
+      for (int g = 0; g < distort_anno_datum->annotation_group_size(); ++g) {
+        const AnnotationGroup& anno_group = distort_anno_datum->annotation_group(g);
+        // Go through each Annotation.
+        for (int a = 0; a < anno_group.annotation_size(); ++a) {
+          const NormalizedBBox& bbox = anno_group.annotation(a).bbox();
+          cv::rectangle(distort_img,
+                        cv::Rect(bbox.xmin()*distort_width, bbox.ymin()*distort_height,
+                                 (bbox.xmax() - bbox.xmin())*distort_width,
+                                 (bbox.ymax() - bbox.ymin())*distort_height),
+                        cv::Scalar(0,255,0));
+        }
+      }
+      cv::imwrite("test_distort.jpg", distort_img );
+    }
     return;
   } else {
     LOG(ERROR) << "Only support encoded datum now";
@@ -1174,6 +1344,38 @@ void DataTransformer<Dtype>::ExpandImage(const cv::Mat& img,
 
   cv::Rect bbox_roi(w_off, h_off, img_width, img_height);
   img.copyTo((*expand_img)(bbox_roi));
+}
+
+template <typename Dtype>
+void DataTransformer<Dtype>::RotateImage(const cv::Mat& img,
+                                         const cv::Mat& rotate_mat,
+                                         const cv::Size2f& rot_size,
+                                         cv::Mat& rotate_img) {
+  const int img_channels = img.channels();
+  const bool has_mean_values = mean_values_.size() > 0;
+
+  if (has_mean_values) {
+    CHECK(mean_values_.size() == 1 || mean_values_.size() == img_channels) <<
+        "Specify either 1 mean_value or as many as channels: " << img_channels;
+    if (img_channels > 1 && mean_values_.size() == 1) {
+      // Replicate the mean_value for simplicity
+      for (int c = 1; c < img_channels; ++c) {
+        mean_values_.push_back(mean_values_[0]);
+      }
+    }
+    cv::warpAffine(img, 
+      rotate_img, 
+      rotate_mat, 
+      rot_size,
+      cv::INTER_CUBIC, 
+      cv::BORDER_CONSTANT, 
+      cv::Scalar(mean_values_[0],
+        mean_values_[1],
+        mean_values_[2],
+        0.0));
+  } else {
+    LOG(ERROR) << "Mean values must be given in data rotation";
+  }
 }
 
 template<typename Dtype>
