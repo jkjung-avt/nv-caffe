@@ -9,6 +9,9 @@
 #include "caffe/proto/caffe.pb.h"
 
 
+//#define DEBUG_ROTATE  1
+//#define DEBUG_DISTORT 1
+
 namespace caffe {
 
 template<typename Dtype>
@@ -988,6 +991,7 @@ void DataTransformer<Dtype>::RotateImage(const AnnotatedDatum& anno_datum,
   // Transform the annotation according to rotate_bbox.
   RotateAnnotation(anno_datum, rotate_mat, rotated_anno_datum);
 
+#ifdef DEBUG_ROTATE
   // Save test image.
   std::ifstream infile("test_rotate.jpg");
   if (!infile.good()) {
@@ -1007,6 +1011,7 @@ void DataTransformer<Dtype>::RotateImage(const AnnotatedDatum& anno_datum,
     }
     cv::imwrite("test_rotate.jpg", rotate_img );
   }
+#endif // DEBUG_ROTATE
 }
 
 template<typename Dtype>
@@ -1034,7 +1039,9 @@ void DataTransformer<Dtype>::DistortImage(const AnnotatedDatum& anno_datum,
     // Save the image into datum.
     EncodeCVMatToDatum(distort_img, "jpg", distort_datum);
     distort_datum->set_label(datum.label());
-    std::ifstream infile("test_distort.jpg");
+
+#ifdef DEBUG_DISTORT
+    //std::ifstream infile("test_distort.jpg");
     if (!infile.good()) {
       const int distort_height = distort_anno_datum->datum().height();
       const int distort_width = distort_anno_datum->datum().width();
@@ -1050,8 +1057,9 @@ void DataTransformer<Dtype>::DistortImage(const AnnotatedDatum& anno_datum,
                         cv::Scalar(0,255,0));
         }
       }
-      cv::imwrite("test_distort.jpg", distort_img );
+      //cv::imwrite("test_distort.jpg", distort_img );
     }
+#endif // DEBUG_DISTORT
     return;
   } else {
     LOG(ERROR) << "Only support encoded datum now";
